@@ -1,0 +1,1094 @@
+---
+title: "<center> <h1>Coronavirus in South Africa</h1> </center>"
+author: "<center>Gilliam Van Der Merwe & Wilhelm Van Der Merwe<center>"
+output:
+  html_document:
+    df_print: paged
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE )
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load("tidyverse",
+               "ggrepel", 
+               "scales", 
+               "zoo", 
+               "lubridate", 
+               "gridExtra", 
+               "cowplot", 
+               "plotly",
+               "rvest",
+               "stringr",
+               "rebus",
+               "readxl",
+               "dplyr",
+               "ggpubr",
+               "ggpmisc",
+               "data.table",
+               "reshape2")
+```
+
+
+# Data Preperation
+
+## Importing Data
+
+```{r Read_Data, message=FALSE, warning=FALSE, paged.print=FALSE, include=FALSE}
+
+# owid_covid_data is provided by Our World in Data
+
+owid_covid_data <- read.csv("https://covid.ourworldindata.org/data/owid-covid-data.csv")
+
+# daily_report is provided by the National Institute for Communicable Diseases (NICD)
+
+daily_report <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/nicd_daily_national_report.csv")
+
+# Prov_excess_deaths is provided by the South African Medical Research Council (SAMRC)
+
+Prov_excess_deaths <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/samrc_excess_deaths_province.csv")
+
+# tests, provincerecCSV, provincedeathCSV and provincecasesCSV are provided by Coronavirus COVID-19 (2019-nCoV) Data Repository for South Africa, Data Science for Social Impact research group, Dr. Vukosi Marivate, University of Pretoria.
+
+tests <- 
+  read.csv("https://github.com/dsfsi/covid19za/raw/master/data/covid19za_timeline_testing.csv")
+
+provincerecCSV <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/covid19za_provincial_cumulative_timeline_recoveries.csv")
+
+provincedeathCSV <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/covid19za_provincial_cumulative_timeline_deaths.csv")
+
+provincecasesCSV <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/covid19za_provincial_cumulative_timeline_confirmed.csv")
+
+# hospital_data is provided by the National Institute for Communicable Diseases (NICD)
+
+hospital_data <- read.csv("https://raw.githubusercontent.com/dsfsi/covid19za/master/data/nicd_hospital_surveillance_data.csv")
+
+# vaccinations is provided by Africa Data Hub
+
+vaccinations <- 
+  read.csv("http://api.mediahack.co.za/adh/sa-vaccinations.csv")
+
+# weekly_hospital_admissions is provided by the National Institute for Communicable Diseases (NICD)
+
+weekly_hospital_admissions <- read.csv("data_raw/weekly_hospital_admissions.csv")
+
+# death_data is provided by the South African Medical Research Council (SAMRC) 
+
+library(readxl)
+total_death_data <- read_excel("data_raw/death_data.xlsx", 
+    sheet = "Total deaths 1+yr", skip = 1)
+
+colnames(total_death_data) <-
+  c("id", "date", "all_cause", "natural", "unatural")
+
+library(readxl)
+death_data <- 
+  read_excel("data_raw/death_data.xlsx", 
+    sheet = "Weekly excesses", col_names = FALSE, 
+    skip = 1, n_max = 2)
+
+
+death_data2 <- 
+  data.frame(t(death_data[-1]))
+
+colnames(death_data2) <-
+  death_data[ , 1]
+
+colnames(death_data2) <-
+  c("excess_death_totals", "location")
+
+excess_deaths_RSA <- 
+  filter(death_data2, location == "RSA")
+
+excess_deaths_prov <- 
+  filter(death_data2, location == "KZN" | location == "EC" | 
+                               location == "GP" | location == "WC" | location == "LP" | 
+                               location == "MP" | location == "FS" | location == "NW" | location == "NC")
+
+excess_deaths_metro <- 
+  filter(death_data2, location == "BUF" | location == "CPT" | 
+                               location == "EKU" | location == "ETH" | location == "JHN" | 
+                               location == "MAN" | location == "NMA" | location == "TSH")
+
+
+```
+
+## Data wrangling
+
+```{r Prepare_Data, message=FALSE, warning=FALSE, paged.print=FALSE, include=FALSE}
+
+owid_setZA <- 
+  filter(owid_covid_data, location == "South Africa")
+
+south_africa_data <- 
+  owid_setZA %>% slice(28: n())
+
+south_africa_data <- 
+  arrange(south_africa_data, desc(date))
+
+south_africa_data_refined <- 
+  select(south_africa_data, date, reproduction_rate)
+
+sa_hospital_data_refined <- 
+  select(hospital_data, date, current_num_in_hospital)
+
+new_daily_confirmed_case_data <- 
+  filter(owid_covid_data, location == "World" | location == "Europe" |
+                      location == "North America" | location == "South America" |
+                      location == "Asia" | location == "Africa" | location == "Oceania")
+
+#convert dates from char format to date format
+provincerecCSV$date <- 
+  dmy(provincerecCSV$date)
+
+provincedeathCSV$date <- 
+  dmy(provincedeathCSV$date)
+
+provincecasesCSV$date <- 
+  dmy(provincecasesCSV$date)
+
+owid_setZA$date <- 
+  ymd(owid_setZA$date)
+
+vaccinations$date <- 
+  ymd(vaccinations$date)
+
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, include=FALSE}
+
+#Create dataframe for lockdown levels
+
+lckdwn <- 
+  data.frame(
+  dateStart = dmy(c("26 March 2020",
+                    "1 May 2020",
+                    "1 June 2020",
+                    "18 August 2020",
+                    "21 September 2020",
+                    "29 December 2020", 
+                    "1 March 2021", 
+                    "31 May 2021", 
+                    "16 June 2021", 
+                    "28 June 2021")),
+                     
+  dateEnd = dmy(c("30 April 2020",
+                  "31 May 2020",
+                  "17 August 2020",
+                  "20 September 2020",
+                  "28 December 2020",
+                  "28 February 2021",
+                  "30 May 2021",
+                  "15 June 2021",
+                  "27 June 2021",
+                  "11 July 2021")),
+                     
+  level = c("Level 5",
+            "Level 4",
+            "Level 3",
+            "Level 2",
+            "Level 1",
+            "Level 3",
+            "Level 1",
+            "Level 2",
+            "Level 3",
+            "Level 4"))
+
+```
+
+# Plotting Figures:
+
+The daily vaccination data was used to create a bar chart with the last eight days' values as an annotation. The rows for the annotation was filtered by using the `slice_tail()` function which allowed the latest values to be retrieved when the data gets updated. The `ggdraw()` function from the `cowplot` package was used to add the table to the graph.
+
+```{r, fig.width=10,fig.height=5}
+
+#Create table for vaccination text annotation
+vactexttbl <- 
+  vaccinations %>%
+  slice_tail(n = 8) %>%
+  select(date, vaccinated_daily)
+
+#plot
+daily_vaccinations <-
+  ggplot(vaccinations, aes(date, vaccinated_daily)) +
+  geom_bar(stat = "identity",
+           width = 0.6) +
+  scale_y_continuous(labels = comma, 
+                     breaks = breaks_width(50000)) +
+  scale_x_date(date_labels = "%d %b") +
+  labs(x="", y="", 
+       title = "Daily Vaccinations") +
+  theme(axis.ticks = element_blank()) 
+
+#add vaccination table with plot 
+ggdraw() +
+  draw_plot(daily_vaccinations) +
+  draw_plot(tableGrob(vactexttbl, cols = colnames(vactexttbl), rows = NULL), x = 0.3, width = 0.2, y = 0.1)
+
+
+```
+
+A line graph was used to display the total vaccinations to date.
+
+```{r}
+
+#plot
+total_vaccinations <-
+  ggplot(vaccinations, aes(date, vaccinated_total)) +
+  geom_line(stat = "identity",
+            color = "red", 
+            size = 1) +
+  scale_y_continuous(labels = comma, 
+                     breaks = breaks_width(500000)) +
+  scale_x_date(date_labels = "%d/%m") +
+  labs(x="", y="",
+       title = "Total Vaccinations") +
+  theme(axis.ticks = element_blank())
+
+ggplotly(total_vaccinations, width = 1000)
+
+```
+
+The daily confirmed cases is plotted as a bar graph along with the 7-day rolling average as a line graph on the top. The lockdown levels is added as rectangles in the background coinciding with the dates.
+
+
+```{r}
+
+#Calculate 7 day average
+owid_setZA <- 
+  owid_setZA %>%
+  arrange(desc(date)) %>%
+  mutate(count_7da = rollmean(new_cases, k = 7, fill = NA)) %>%
+  ungroup()
+
+#plot
+daily_cases <-
+  ggplot() +
+  geom_bar(data = owid_setZA, aes(date, new_cases), 
+           stat = "identity",
+           width = 0.4,
+           color = "grey50"
+           ) +
+  geom_line(data = owid_setZA, aes(date, count_7da),
+            color="red",
+            size = 1) +
+  scale_y_continuous(labels = comma, 
+                     breaks = breaks_width(10000)) +
+  scale_x_date(date_labels = "%d %b",
+               date_breaks = "1 month") +
+  labs(title = "Daily Confirmed Cases", x="", y="") +
+  theme(axis.ticks = element_blank()) +
+  geom_rect(data = lckdwn,
+          aes(xmin = dateStart,
+          xmax = dateEnd,
+          fill = level),
+          ymin = 0,
+          ymax = 100000,
+          alpha = 0.15,
+          show.legend = FALSE) +
+  scale_fill_manual(values = c("Level 1" = "lightgreen", "Level 2" = "yellow2", "Level 3" = "orange", "Level 4" = "orangered", "Level 5" = "red"))
+
+ggplotly(daily_cases, width = 1000) %>%
+  layout(title = list(text = paste0('Daily Confirmed Cases',
+                                    '<br>',
+                                    '<br>',
+                                    '<sup>',
+                                    'This chart shows the daily confirmed cases since March 2020. The levels refer to the lockdown levels. Red line is the 7-day rolling average.',
+                                    '</sup>')))
+
+
+```
+
+For the daily active case totals there was no data set providing the active cases day-by-day so it was calculated as follows `active cases = total cases - total recovered - total deaths`. The data first needed to be extracted from three different data sets and then joined by date to be able to calculate the daily active cases. The results were plotted in a bar graph.
+
+```{r}
+
+#Select totals from death, recoveries and confirmed cases
+recoveriesTotal <-
+  provincerecCSV %>%
+  select(date, total) %>%
+  rename(recoveryTotal = total)
+
+deathsTotal <- 
+  provincedeathCSV %>%
+  select(date, total) %>%
+  rename(deathTotal = total)
+
+confirmedTotal <- 
+  provincecasesCSV %>%
+  select(date, total) %>%
+  rename(confirmedTotal = total)
+
+#Join tables on date
+provinceTotals <- 
+  inner_join(recoveriesTotal, deathsTotal, on = date) %>%
+  inner_join(confirmedTotal, on = date)
+
+#Calculate daily active cases column (Active cases = total cases - total recovered - total deaths)
+provinceTotals <- provinceTotals %>%
+  mutate(activeCases = confirmedTotal - recoveryTotal - deathTotal)
+
+#plot
+daily_active <-
+  ggplot(provinceTotals, aes(date, activeCases)) +
+  geom_bar(stat = "identity",
+           width = 0.5) +
+  scale_y_continuous(labels = comma,
+                     breaks = breaks_width(100000)) +
+  scale_x_date(date_labels = "%d %b",
+               date_breaks = "1 month") +
+  labs(x="", y="",
+       title = "Active Case Total by Day") +
+  theme(axis.ticks = element_blank())
+
+ggplotly(daily_active, width = 1000)
+
+```
+
+The daily deaths were plotted using a bar graph.
+
+```{r}
+
+#plot
+daily_deaths <-
+  ggplot(owid_setZA, aes(date, new_deaths)) +
+  geom_bar(stat = "identity",
+           width = 0.5) +
+  scale_y_continuous(labels = comma, 
+                     breaks = breaks_width(200)) +
+  scale_x_date(date_labels = "%d %b",
+               date_breaks = "1 month") +
+  labs(x="", y="",
+       title = "Daily Deaths") +
+  theme(axis.ticks = element_blank())
+
+ggplotly(daily_deaths, width = 1000)
+
+```
+
+For the daily case trends by province the last eight months' data was filtered. The data however only contained cumulative values and the daily values were calculated through the `lag()` function. Thereafter the data was converted from a 'wide' to 'long' format and the 7-day average were calculated for each province. The data is displayed as line graphs, faceted by province.
+
+```{r}
+
+#Filter on last 8 months
+provincecases <-
+  provincecasesCSV %>% 
+  filter(date > (today()-dmonths(8)))
+
+#Calculate daily cases from cumulative cases
+provincecases <-
+  provincecases %>%  
+  mutate(EC_daily= EC - lag(EC)) %>%
+  mutate(FS_daily = FS - lag(FS)) %>%
+  mutate(GP_daily = GP - lag(GP)) %>%
+  mutate(KZN_daily = KZN - lag(KZN)) %>%
+  mutate(LP_daily = LP - lag(LP)) %>%
+  mutate(MP_daily = MP - lag(MP)) %>%
+  mutate(NC_daily = NC - lag(NC)) %>%
+  mutate(NW_daily = NW - lag(NW)) %>%
+  mutate(WC_daily = WC - lag(WC)) 
+
+
+#Select daily cases only  
+provincecases <-
+  provincecases %>% select(date, ends_with("daily"))
+
+#Convert from wide to long data
+dailyprovincecasesLong <-
+  provincecases %>%
+  gather(province, count, EC_daily:WC_daily)
+
+#Calculate 7 day average
+provincecases7da <- 
+  dailyprovincecasesLong %>%
+  group_by(province) %>% 
+  mutate(count_7da = rollmean(count, k = 7, fill = NA)) %>%
+  ungroup()
+
+#plot
+provincedaily <-
+  ggplot(provincecases7da, aes(date, count_7da)) +
+  geom_line(stat = "identity",
+            color = "red", 
+            size = 1) +
+  labs(x="", y="",
+       title = "Daily Case Trends") +
+  scale_y_continuous() +
+  scale_x_date(date_labels = "%d %b", 
+               date_breaks = "4 month") +
+  facet_wrap(~province, scales = "free_y") +
+  theme(axis.title.y = element_blank(), 
+        axis.text.y = element_blank(), 
+        axis.ticks = element_blank())
+
+ggplotly(provincedaily, width = 1000, height = 800)%>%
+  layout(title = list(text = paste0('Daily Case Trends',
+                                    '<br>',
+                                    '<sup>',
+                                    'These charts uses the seven-day average of daily new cases, for the past eight months, which evens out spikes',
+                                    '</sup>')),
+         margin=list(t = 75))
+
+```
+
+The total and active cases were plotted as line graphs on a single plot.
+
+```{r}
+
+#plot
+totalvsactive <-
+  ggplot(provinceTotals) +
+  geom_line( aes(date, confirmedTotal, 
+                 color = "Cases"), 
+            size = 1) +
+  geom_line(aes(date, activeCases,
+                color="Active Cases"),
+            size = 1) +
+    scale_color_manual(values = c(
+    'Cases' = 'red',
+    'Active Cases' = 'blue')) +
+  scale_y_continuous(labels = comma) +
+  scale_x_date(date_labels = "%d/%m", 
+               date_breaks = "3 month") +
+  labs(x="", y="",
+       title = "Cases VS Active Cases",
+       color = "") +
+  theme(axis.ticks = element_blank())
+
+ggplotly(totalvsactive, width = 1000) %>%
+  layout(legend = list(x = 0.1, y = 0.9))
+
+```
+
+For the total deaths the data was plotted using a line graph along with the case fatality rate (CFR). The CFR is calculated using `(Total deaths/ Total cases * 100)`. As the two data columns has different values the y-axis labels for the CFR, which is in percentage, needed to be adjusted manually. The last (maximum) value from the total death columns was also filtered to add as an annotation 
+
+```{r, fig.width=10,fig.height=5}
+
+#Calculate CFR (Total deaths/ Total cases * 100)
+cfr <-
+  owid_setZA %>%
+  select(date, total_cases, total_deaths) %>%
+  mutate(cfr_per = total_deaths/total_cases * 100)
+
+#filter last values
+deaths_end <- 
+  cfr %>%
+  arrange(date) %>%
+  top_n(1, total_deaths)
+
+#Set scale for secondary axis
+scl = 10000
+
+#plot
+deathscfr <-
+  ggplot(cfr, aes(x = date,
+                  y = total_deaths)) +
+  geom_line(aes(y = total_deaths, 
+                color = "Total Deaths"), 
+            size = 1) +
+  geom_text_repel(label = deaths_end$total_deaths, 
+                  data = deaths_end)+
+  geom_line(aes(y = cfr_per*scl, color="Case Fatality Rate (CFR)"), 
+            linetype = "dashed",
+            size = 1) +
+  scale_color_manual(values = c(
+    'Total Deaths' = 'red',
+    'Case Fatality Rate (CFR)' = 'blue')) +
+  scale_y_continuous(labels = comma, 
+                     breaks = breaks_width(20000), 
+                     sec.axis = sec_axis(~./scl)) +
+  scale_x_date(date_labels = "%d/%m", 
+               date_breaks = "3 month") +
+  labs(x="", y="",
+       title = "Total Deaths",
+       color = "") +
+  theme(axis.ticks = element_blank(),
+        legend.position = c(0.8, 0.2))
+
+deathscfr
+```
+
+The doubling rate is essentially the number of days it takes for the cases/deaths to double in value. This was calculated using the formula in this [article](http://njcmindia.org/uploads/11-3_141-143.pdf) written by Swati B. Patel and Prakash Patel.
+
+```{r}
+
+#Calculate doubling rates for confirmed cases & deaths
+owid_setZA <- 
+  owid_setZA %>%
+  arrange(date) %>%
+  mutate(death_dbl = 7 * (log(2) / 
+                            (log(total_deaths /
+                                   lag(total_deaths, n = 7))))) %>%
+  mutate(cases_dbl = 7 * (log(2) / 
+                            (log(total_cases /
+                                   lag(total_cases, n = 7)))))
+
+deathDB <-
+  ggplot(owid_setZA) +
+  geom_line( aes(x = date, y = death_dbl, 
+                 color = "Deaths"),
+             size = 1) +
+  geom_line(aes(x = date,y = cases_dbl,
+                color = "Confirmed Cases"),
+            size = 1) +
+  scale_color_manual(values = c(
+    'Deaths' = 'red',
+    'Confirmed Cases' = 'blue')) +
+  labs(x="", y="",
+       title = "Doubling Rates",
+       color = "")
+
+ggplotly(deathDB, width = 1000)%>%
+  layout(title = list(text = paste0('Doubling Rates',
+                                    '<br>',
+                                    '<sup>',
+                                    'Beta: Number of days for cases/deaths to double.',
+                                    '</sup>')),
+         legend = list(x = 0.1, y = 0.9))
+```
+
+For the total deaths by province the latest values (maximum) was selected, after this the data was converted to a 'long' format to be able to plot it as a histogram. The values were also added as annotations for each province.
+
+```{r}
+
+#Select last row from deaths(max deaths)
+Tprovincedeaths <- 
+  provincedeathCSV %>%
+  slice(n())
+
+#Convert from wide to long data
+TprovincedeathsLong <- 
+  Tprovincedeaths %>%
+  gather(province, count, EC:WC)
+
+#plot
+deathbyprovince <-
+  ggplot(TprovincedeathsLong, aes(reorder(province, -count), count)) +
+  geom_histogram(stat = "identity", 
+                 fill = "red") +
+  geom_text(aes(label = count),
+            vjust = -0.3) +
+  labs(x="", y="",
+       title = "Deaths by Province") +
+  theme(axis.ticks = element_blank())
+  
+deathbyprovince
+```
+
+To calculate the deaths per 100,000 population the values for each province where added in another column. The data was collected from the Stats SA [website](http://www.statssa.gov.za/publications/P0302/P03022020.pdf). The histogram was annotated with the values.
+
+```{r}
+
+#Add province population according to http://www.statssa.gov.za/publications/P0302/P03022020.pdf
+death100k <-
+  TprovincedeathsLong %>%
+  mutate(population = case_when(
+    endsWith(province, "GP") ~ 15488137,
+    endsWith(province, "KZN") ~ 11531628,
+    endsWith(province, "WC") ~ 7005741,
+    endsWith(province, "EC") ~ 6734001,
+    endsWith(province, "LP") ~ 5852553,
+    endsWith(province, "MP") ~ 4679786,
+    endsWith(province, "NW") ~ 4108816,
+    endsWith(province, "FS") ~ 2928903,
+    endsWith(province, "NC") ~ 1292786))
+
+#Calculate deaths/100k
+death100k <-
+  death100k %>%
+  mutate(death100k = round(count/population * 100000, digits = 2))
+
+#plot
+death100kplot <-
+  ggplot(death100k, aes(reorder(province, -count), death100k)) +
+  geom_histogram(stat = "identity",
+                 fill = "red") +
+  geom_text(aes(label = death100k),
+            vjust = -0.3) +
+  labs(x="", y="",
+       title = "Deaths by Province (per 100K)") +
+  theme(axis.ticks = element_blank())
+  
+death100kplot
+
+```
+
+For the province infections per 100,000 population the latest (maximum) values where again selected, then converted to long format and the province population added as a column. The histogram was again annotated with the latest values.
+
+```{r}
+
+#Select last row from cases (max cases)
+infect100k <-
+  provincecasesCSV %>%
+  slice(n())
+  
+
+#Convert data from wide to long
+infect100kLong <- 
+  infect100k %>%
+  gather(province, count, EC:WC)
+
+#Add province population according to http://www.statssa.gov.za/publications/P0302/P03022020.pdf
+infect100k <- 
+  infect100kLong %>%
+  mutate(population = case_when(
+    endsWith(province, "GP") ~ 15488137,
+    endsWith(province, "KZN") ~ 11531628,
+    endsWith(province, "WC") ~ 7005741,
+    endsWith(province, "EC") ~ 6734001,
+    endsWith(province, "LP") ~ 5852553,
+    endsWith(province, "MP") ~ 4679786,
+    endsWith(province, "NW") ~ 4108816,
+    endsWith(province, "FS") ~ 2928903,
+    endsWith(province, "NC") ~ 1292786))
+
+#Calculate cases/100k
+infect100k <-
+  infect100k %>%
+  mutate(infect100k = round(count/population * 100000, digits = 2))
+
+#plot
+infect100kplot <-
+  ggplot(infect100k, aes(y = reorder(province, infect100k), infect100k)) +
+  geom_histogram(stat = "identity",
+                 fill = "red") +
+  geom_text(aes(label = infect100k),
+            hjust = 1) +
+  labs(x="", y="",
+       title = "Province Infections per 100K Population") +
+  theme(axis.ticks = element_blank())
+  
+infect100kplot
+
+```
+
+For the confirmed and active case trends by province plots the province- cases, deaths and recoveries data sets were each converted to a 'long' format where-after it was joined on the date. Again the formula, `active cases = total cases - total recovered - total deaths`, were used to calculate the active cases column. The data were then plotted as line graphs and faceted by province.
+
+```{r}
+
+#Convert province cases, recoveries & deaths from wide to long
+
+pcaseslong <-
+  provincecasesCSV %>%
+  select(date, EC:WC) %>%
+  gather(province, confirmed_cases, EC:WC)
+
+pdeathslong <-
+  provincedeathCSV %>%
+  select(date, EC:WC) %>%
+  gather(province, confirmed_deaths, EC:WC)
+
+precoverieslong <-
+  provincerecCSV %>%
+  select(date, EC:WC) %>%
+  gather(province, confirmed_recoveries, EC:WC)
+
+#Join tables on date
+pactivecases <- 
+  inner_join(pcaseslong, pdeathslong, on = date) %>% 
+  inner_join(precoverieslong, on = date)
+
+#Calculate daily active cases column (Active cases = total cases - total recovered - total deaths)
+pactivecases <-
+  pactivecases %>%
+  mutate(active_cases = confirmed_cases - confirmed_recoveries - confirmed_deaths)
+
+#plot
+pactiveplot <-
+  ggplot(pactivecases) +
+  geom_line( aes(date, active_cases),
+             color = "blue", 
+             size = 1) +
+  geom_line(aes(date, confirmed_cases),
+            color = "red",
+            size = 1) +
+  labs(x="", y="",
+       title = "Confirmed and Active Cases by Province") +
+  scale_y_continuous(labels = comma) +
+  facet_wrap(~province) +
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank())
+
+ggplotly(pactiveplot, width = 1000, height = 800)
+
+```
+
+Bar chart showing the average daily tests per week. In order to plot the bar chart, data from the `south_africa_data` dataframe is needed. The data frame `daily_test_per_week_df` was created so that `south_africa_data` could be mutated by replacing "NA" values with 0. This was done in order to calculate weekly averages. 
+
+```{r Average_daily_tests_per_week, fig.height=15, fig.width=10, message=FALSE, warning=FALSE, paged.print=FALSE}
+ 
+# Create a list where all "NA" values are replaced with 0 
+
+daily_test_per_week_df <- south_africa_data %>% 
+  mutate_at(c(1:60), ~replace(., is.na(.), 0))
+
+# Create list where data is grouped by week and the average of each week's daily new tests calculated
+
+daily_test_per_week_df <- daily_test_per_week_df %>% 
+  group_by(week = cut(parse_date_time(date, "Y%/m%/d%"), "week")) %>% 
+  summarise(value = mean(new_tests_smoothed))
+
+# Plot bar chart
+
+avg_daily_tests_per_week_plot <- 
+  ggplot(daily_test_per_week_df, mapping = aes(x = reorder(week, desc(week)), y = value)) +
+  geom_col(stat = "identity", position = "dodge" ,fill = "red") +
+  geom_text(aes(label = round(value)), vjust = 0.1, hjust = 0)
+  
+# Flip the coordinates of the bar chart
+
+avg_daily_tests_per_week_plot + coord_flip() +
+  ggtitle("Average Daily Tests Per Week") +
+  xlab("Week") + 
+  ylab("") +
+  theme(axis.text.y = element_text(angle = 0))
+
+```
+
+Bar chart showing the average daily positive cases per week. In order to plot this bar chart, the "NA" values needed to be replaced as well to correctly calculate the weekly averages for daily positive cases. 
+
+```{r Average_daily_positives_per_week, fig.height=15, fig.width=10, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Create a list where all "NA" values are replaced with 0 
+
+daily_positive_case_per_week <- south_africa_data %>% 
+  mutate_at(c(1:60), ~replace(., is.na(.), 0))
+
+# Create list where data is grouped by week and the average of each week's daily positive cases are calculated
+
+daily_positive_case_per_week <- daily_positive_case_per_week %>% 
+  group_by(week = cut(parse_date_time(date, "Y%/m%/d%"), "week")) %>% 
+  summarise(value = mean(new_cases_smoothed))
+
+# Plot bar chart
+
+ggplot(data = daily_positive_case_per_week, mapping = aes(x = reorder(week, desc(week)), y = value)) + 
+  geom_col(position = "dodge", fill = "red") +
+  xlab("Week") + 
+  ylab("") + 
+  ggtitle("Average Daily Positives Per Week") +  
+  geom_text(aes(label = round(value)), vjust = 0.5, hjust = 0) +
+  coord_flip()
+
+```
+
+Bar chart showing the number of tests conducted per positive case (weekly). In order to plot this bar chart, the "NA" values needed to be replaced as well to correctly calculate the weekly averages for the number of tests per positive case.
+
+```{r No_of_tests_per_positive_case_(weekly), fig.height=15, fig.width=10, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Create a list where all "NA" values are replaced with 0 
+
+test_per_positive_case <- south_africa_data %>% 
+  mutate_at(c(1:60), ~replace(., is.na(.), 0))
+
+# Create list where data is grouped by week and the average of each week's tests per positive case are calculated
+
+test_per_positive_case <- test_per_positive_case %>% 
+  group_by(week = cut(parse_date_time(date, "Y%/m%/d%"), "week")) %>% 
+  summarise(value = mean(new_tests_smoothed) / mean(new_cases_smoothed))
+
+# Plot bar chart
+
+ggplot(data = test_per_positive_case, mapping = 
+              aes(x = reorder(week, desc(week)), y = value)) + 
+  geom_col(stat = "identity", position = "dodge", fill = "red") +
+  xlab("Week") + 
+  ylab("") + 
+  ggtitle("Number of Tests per Positive Case (Weekly)") +  
+  geom_text(aes(label = round(value,2), vjust = 0.5, hjust = 0)) +
+  coord_flip()
+
+```
+
+Point chart showing the daily tests and positive cases. In order to plot this point chart, the data frame `south_africa_data` was used along with the `ggplot` package. 
+
+```{r Daily_tests_and_positive_cases, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Plot point chart
+
+ggplot(data = south_africa_data, mapping = aes(x = round_date(parse_date_time(date, "Y%/m%/d%"), unit = "day"), y = new_tests_smoothed), size = new_cases_smoothed) + 
+  geom_point(aes(size = new_cases_smoothed), col = "tomato3", alpha = 0.7, show.legend = F) +
+  xlab("") + 
+  ylab("Number of Tests per Day") +
+  scale_radius() +
+  ggtitle("Daily Tests and Positive Cases")
+
+```
+
+Bar chart showing the confirmed infections for the last 20 days. In order to plot this bar chart, the data frame `confirmed_infections_last_twenty_days` was created. This data frame was derived from the `south_africa_data` data frame which was filtered and arranged so that only the last twenty days' confirmed infections were plotted in descending order of date. 
+
+```{r Confirmed_infections_(last_20_days), message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Filter data-set to obtain confirmed infection for the last twenty days
+
+confirmed_infections_last_twenty_days <- 
+  filter(arrange(south_africa_data, date), between(row_number(), n()-19, n()))
+
+# Plot bar chart
+
+ggplot(data = confirmed_infections_last_twenty_days, mapping = 
+  aes(x = reorder(date, desc(date)), y = new_cases)) +
+  geom_col(position = "stack", fill = "red") +
+  xlab("") + 
+  ylab("") + 
+  ggtitle(" Confirmed Infections (Last 20 Days)") +  
+  geom_text(aes(label = new_cases), vjust = 0.5, hjust = 0) +
+  coord_flip()
+
+```
+
+Bar chart showing the positivity rate: number of tests conducted versus the percentage positive cases. In order to plot this chart, which consists of both bar and line charts, the data frame `pos_rate_df` was used. This data frame was derived from the `south_africa_data` data frame after it was filtered and arranged by taking the last month's rows. 
+
+```{r Positivity_Rate_Number_of_tests_vs_Positive_Cases, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Prepare list for graph plot by filtering and sorting data from south_africa_data
+
+pos_rate_df <-
+  filter(arrange(south_africa_data, date), between(row_number(), n()-26, n()))
+
+# Plot bar chart of number of tests and line chart of positivity rate
+
+ggplot(pos_rate_df) +
+  geom_col(aes(x = date, y = new_tests), size = 1, fill = "blue") +
+  geom_line(aes(x = date, y = (positive_rate * 100)*3500), colour = "red", size = 1.5, group = 1) +
+  scale_y_continuous(name = "Tests Conducted", sec.axis = sec_axis(~ . /3500, name = "Positive Tests (%)")) +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+
+Line chart showing the national hospital admissions. In order to plot this line chart, data from the `weekly_hospital_admissions` data frame was used. 
+
+```{r National_Hospital_Admissions, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Plot line chart
+
+ggplot(weekly_hospital_admissions) +
+  geom_line(mapping = aes(x = round_date(parse_date_time(week_start, "Y%/m%/d%"), unit = "week"), y = total_national_hospital_admissions), colour = "red") +
+  ggtitle("National Hospital Admissions") +
+  xlab("EPI WEEK") + 
+  ylab("")
+
+```
+
+Table showing public versus private tests. In order to create this table, various data preparations and calculations were made, along with the `plotly` package.
+
+```{r Public_vs_Private_Tests, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Prepare and calculate data for the creation of the plotly table
+
+df <- 
+  tests %>% 
+  slice(n()-1)
+
+latest_daily_report <- 
+  tests %>% 
+  slice(n())
+
+total_tests_var <- 
+  latest_daily_report$cumulative_tests
+
+total_tests_var_percent <- 
+  "100 (%)"
+
+total_public_tests_var <- 
+  latest_daily_report$cumulative_tests_public
+
+total_public_tests_var_percent <- 
+  round((total_public_tests_var/total_tests_var) * 100, 2)
+
+total_private_tests_var <-
+  latest_daily_report$cumulative_tests_private
+
+total_private_tests_var_percent <-
+  round((total_private_tests_var/total_tests_var) * 100, 2)
+
+new_public_tests_var <- 
+  latest_daily_report$cumulative_tests_public 
+- df$cumulative_tests_public
+
+new_private_tests_var <- 
+  latest_daily_report$cumulative_tests_private 
+- df$cumulative_tests_private
+
+total_new_tests_var <- 
+  new_public_tests_var + new_private_tests_var
+
+new_public_tests_var_percent <- 
+  round((new_public_tests_var/total_new_tests_var) * 100, 2)
+
+new_private_tests_var_percent <- 
+  round((new_private_tests_var/total_new_tests_var) * 100, 2)
+
+tab <- 
+  matrix(c(total_tests_var,total_tests_var_percent,total_public_tests_var, total_public_tests_var_percent, total_private_tests_var, total_private_tests_var_percent, new_public_tests_var, new_public_tests_var_percent, new_private_tests_var, new_private_tests_var_percent), ncol=2, byrow=TRUE)
+
+rownames(tab) <- 
+  c('Total Tests','Total Public Tests','Total Private Tests',
+                   'New Public Tests', 'New Private Tests')
+tab <- 
+  as.table(tab)
+
+public_vs_private_table <- 
+  as.data.frame.matrix(tab)
+
+# Create a plotly table for public_vs_private_table list
+
+pvp <- 
+  plot_ly(
+  width = 1000,
+  height = 500,
+  type = 'table',
+  header = list(
+    values = c("<b>Public vs. Private Tests</b>", names(public_vs_private_table)),
+    align = c('left', rep('center', ncol(public_vs_private_table))),
+    line = list(width = 1, color = 'black'),
+    fill = list(color = 'rgb(0, 165, 219)'),
+    font = list(family = "Arial", size = 14, color = "white")
+  ),
+  cells = list(
+    values = rbind(
+      rownames(public_vs_private_table), 
+      t(as.matrix(unname(public_vs_private_table)))
+    ),
+    align = c('left', rep('center', ncol(public_vs_private_table))),
+    line = list(color = "black", width = 1),
+    fill = list(color = c('rgb(0, 220, 219)', 'rgba(228, 222, 249, 0.65)')),
+    font = list(family = "Arial", size = 12, color = c("black"))
+  ))
+
+pvp
+
+```
+
+Point chart showing the current reproduction rate estimates for South Africa. In order to plot this point chart, the data frame `south_africa_data_refined` and the `ggplot` package was utilized. The data frame, `south_africa_data_refined`, was derived from the `south_africa_data` data frame. The data frame was modified so that it will only contain the `date` and `reproduction_rate` variables. 
+
+```{r Current_Rt_estimates_for_South_Africa, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Plot a point chart
+
+ggplot(data = south_africa_data_refined, mapping = 
+         aes(x = round_date(parse_date_time(date, "Y%/m%/d%"), unit = "day"), y = reproduction_rate, 
+  group = 1)) + 
+  geom_ribbon(aes(ymin = reproduction_rate - 0.1, ymax = reproduction_rate + 0.1), fill = "grey70") +
+  geom_point(aes(colour = "red"), show.legend = F, position = position_dodge()) +
+  ggtitle("Current Rt Estimates for South Africa") +
+  xlab("") + 
+  ylab("")
+
+```
+
+Bar chart showing the excess number of deaths in South Africa. In order to plot this bar chart, data from the data frame `provincedeathCSV` along with the `ggplot` and `dplyer` packages were used. The last row containing the covid-19 death totals for South Africa as a whole was sliced and stored in the data frame `temp_df`. Thereafter, a new column called `excess_death_total_column` with the excess death total for South Africa was added to `temp_df`. Thereafter, the bar charts were stacked on top of each other in order to illustrate the difference in excess total deaths and covid-19 total deaths for South Africa. 
+
+```{r Excess_Deaths_South_Africa, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Get the last row in data frame and store it in temp_df
+
+temp_df <- 
+  provincedeathCSV %>% 
+  slice(n())
+
+# Add new column to temp_df
+
+temp_df <- 
+  temp_df %>%
+  add_column(excess_death_total_column = excess_deaths_RSA$excess_death_totals)
+
+# Plot bar charts stacked on top of each other
+
+ggplot(temp_df, aes(x = date)) +
+  geom_col(mapping = aes(y = round(as.numeric(excess_death_total_column))), fill = "blue") +
+  geom_col(temp_df, mapping = aes(y = total), fill = "red") +
+  geom_text(aes(y = round(as.numeric(excess_death_total_column)), label = round(as.numeric(excess_death_total_column)), vjust = -0.5, hjust = 0.5)) +
+  geom_text(aes(y = total, label = total), vjust = -0.5, hjust = 0.5) +
+  ggtitle("Excess Deaths (South Africa)") +
+  xlab("") + 
+  ylab("") + 
+  coord_cartesian(expand = T, ylim = c(0,200000))
+
+```
+
+Bar charts showing the excess deaths and covid-19 deaths per province in South Africa. In order to plot this bar chart, data from the data frame `provincedeathCSV` along with the `ggplot` and `dplyer` packages were used. The last row containing the covid-19 death totals per province was sliced and stored in the data frame `df`. Which was then converted from a `data.frame` to a `data.table` by reference with the use of the `setDT()` function. Thereafter, the data was transformed into a separate column via the `stack()` function. Unnecessary rows were removed in order for the tables `excess_deaths_prov` and `temp` to be merged into table `joined_df` by variables location and `prov_code`. Thereafter, the bar charts were stacked on top of each other in order to illustrate the difference in excess deaths and covid-19 deaths per province. 
+
+```{r Excess_Deaths_Provinces, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Get the last row in data frame and store it in df
+
+df <-
+  provincedeathCSV %>% 
+  slice(n())
+
+# Convert data.frame into data.table by reference
+
+setDT(df,keep.rownames = T)[]
+
+# Transform data into a separate column
+
+temp <- 
+  stack(df)
+
+# Remove unwanted rows
+
+temp <-
+  temp[-c(1,2,12, 13,14), ,drop = F]
+
+# Rename column names
+
+colnames(temp) <- 
+  c("death_totals", "prov_code")
+
+# Join data frames: excess_deaths_prov & temp and store it in joined_df
+
+joined_df <- 
+  merge(excess_deaths_prov, temp, by.x = "location", 
+             by.y = "prov_code", all.x = TRUE, all.y = TRUE)
+
+# Plot bar charts stacked on top of each other
+
+ggplot(joined_df, mapping = aes(x = reorder(location, desc(as.numeric(excess_death_totals))), y = round(as.numeric(excess_death_totals)), digits = 2)) +
+  geom_col(fill = "blue") +
+  geom_col(joined_df, mapping = aes(y = as.numeric(death_totals)), fill = "red") +
+  geom_text(aes(label = round(as.numeric(excess_death_totals)), vjust = -0.5, hjust = 0.5)) +
+  ggtitle("Excess Deaths (Provinces)") +
+  xlab("") + 
+  ylab("") + 
+  coord_cartesian(ylim = c(0,45000))
+
+```
+
+Bar chart showing the excess deaths in the metro areas in South Africa. In order to plot this chart, the data frame `excess_deaths_metro` was utilized along with the `ggplot` package. The bar chart is ordered from highest excess death count to lowest.  
+
+```{r Excess_Deaths_Metros}
+
+# Plot bar chart
+
+ggplot(excess_deaths_metro, mapping = aes(x = reorder(location, desc(as.numeric(excess_death_totals))), 
+                                          y = round(as.numeric(excess_death_totals)), digits = 2)) +
+  geom_col(fill = "blue") +
+  geom_text(aes(label = round(as.numeric(excess_death_totals)), vjust = -0.5, hjust = 0.5)) +
+  ggtitle("Excess Deaths (Metros)") +
+  xlab("") + 
+  ylab("") + 
+  coord_cartesian(ylim = c(0,13000))
+
+```
+
+Line chart showing the new daily confirmed Covid-19 cases on a 7-day moving average scale for the regions: Africa, Asia, Europe, North America, Oceania, South America and the World. In order to plot this chart, data from the data frame `new_daily_confirmed_case_data` was used, along with the `ggplot` package. The `new_daily_confirmed_case_data` was derived from filtering the locations from the `owid_covid_data` data frame. The line chart was was grouped by `location` (i.e. region). 
+
+```{r New_daily_confirmed_Covid-19_cases_7_day_average, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Plot line graph
+
+ggplot(new_daily_confirmed_case_data, mapping = 
+         aes(x = round_date(parse_date_time(date, "Y%/m%/d%"), unit = "day"), 
+             y = new_cases_smoothed, 
+             group = location)) + 
+  geom_line(aes(colour = location)) +
+  ggtitle("New Daily Confirmed Covid-19 Cases: 7-Day Average") +
+  xlab("") + 
+  ylab("") + 
+  coord_cartesian(ylim = c(0,1000000))
+
+```
